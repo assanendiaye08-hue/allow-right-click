@@ -239,11 +239,12 @@ function updateBadge(tabId) {
 async function initiateDownload(url, tab) {
   const filename = generateFilename(url, tab);
 
-  // First: always check if we have a progressive (complete) MP4 from API parsing
+  // First: find the HIGHEST QUALITY progressive (complete) MP4 from API parsing
   const state = getTabState(tab.id);
-  const progressiveVideo = Array.from(state.videos.values()).find(
-    v => v.progressive && /^https?:\/\//i.test(v.url) && /\.mp4/i.test(v.url)
-  );
+  const progressiveVideos = Array.from(state.videos.values())
+    .filter(v => v.progressive && /^https?:\/\//i.test(v.url) && /\.mp4/i.test(v.url))
+    .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  const progressiveVideo = progressiveVideos[0] || null;
 
   if (/^https?:\/\//i.test(url) || progressiveVideo) {
     // Prefer progressive URL if available (complete file from API)

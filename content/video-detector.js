@@ -52,6 +52,9 @@
       pageTitle: document.title,
       isBlob: url.startsWith('blob:'),
       encrypted: false,
+      progressive: meta.progressive || false,
+      bitrate: meta.bitrate || 0,
+      quality: meta.quality || '',
       timestamp: Date.now()
     };
 
@@ -366,7 +369,13 @@
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     if (event.data?.type === '__ARC_VIDEO_FOUND__' && event.data.url) {
-      reportVideo(event.data.url, { source: 'network-intercept' });
+      const meta = event.data.meta || {};
+      reportVideo(event.data.url, {
+        source: meta.source || 'network-intercept',
+        progressive: meta.progressive,
+        bitrate: meta.bitrate,
+        quality: meta.quality
+      });
     }
   });
 
