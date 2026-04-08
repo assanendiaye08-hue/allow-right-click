@@ -352,10 +352,10 @@ async function downloadSegments(segments, filename) {
   }
 
   // Convert to data URL for download
-  const blob = new Blob([combined], { type: 'video/mp2t' });
+  const blob = new Blob([combined], { type: 'video/mp4' });
   const reader = new FileReader();
   reader.onloadend = () => {
-    const tsFilename = filename.replace(/\.[^.]+$/, '.ts');
+    const tsFilename = filename.replace(/\.[^.]+$/, '.mp4');
     chrome.downloads.download({ url: reader.result, filename: tsFilename, saveAs: true });
   };
   reader.readAsDataURL(blob);
@@ -419,7 +419,7 @@ function generateFilename(url, tab) {
   } catch {}
   // Fall back to page title
   const title = (tab?.title || 'video').replace(/[^\w\s-]/g, '').trim().substring(0, 60);
-  const ext = /\.m3u8/i.test(url) ? 'ts' : 'mp4';
+  const ext = 'mp4';
   return `${title}.${ext}`;
 }
 
