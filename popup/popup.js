@@ -4,6 +4,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
 
+  /* ── Right-Click Toggle ── */
+
+  const toggleBtn = document.getElementById('toggle-btn');
+  const toggleStatus = document.getElementById('toggle-status');
+
+  // Check current state
+  const state = await chrome.runtime.sendMessage({ type: 'get-state', tabId: tab.id });
+  const isActive = state?.rightClickActive !== false; // default ON
+  updateToggleUI(isActive);
+
+  function updateToggleUI(active) {
+    toggleBtn.setAttribute('aria-pressed', String(active));
+    toggleStatus.textContent = active ? 'ON' : 'OFF';
+    toggleStatus.className = 'status-badge ' + (active ? 'active' : 'inactive');
+  }
+
+  toggleBtn.addEventListener('click', async () => {
+    const current = toggleBtn.getAttribute('aria-pressed') === 'true';
+    const response = await chrome.runtime.sendMessage({
+      type: 'toggle-right-click',
+      tabId: tab.id
+    });
+    updateToggleUI(response?.active ?? !current);
+  });
+
   /* ── Video List ── */
 
   const videoList = document.getElementById('video-list');

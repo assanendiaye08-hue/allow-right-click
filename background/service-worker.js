@@ -4,7 +4,7 @@ const tabStates = new Map(); // tabId -> { rightClickActive, videos: Map<url, in
 
 function getTabState(tabId) {
   if (!tabStates.has(tabId)) {
-    tabStates.set(tabId, { rightClickActive: false, videos: new Map() });
+    tabStates.set(tabId, { rightClickActive: true, videos: new Map() });
   }
   return tabStates.get(tabId);
 }
@@ -432,23 +432,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status === 'loading' && changeInfo.url) {
-    // Page is navigating — clear video list, check whitelist
+    // Page is navigating — clear video list, reset to ON (scripts auto-inject)
     const state = getTabState(tabId);
     state.videos.clear();
-    state.rightClickActive = false;
+    state.rightClickActive = true;
     updateBadge(tabId);
-    updateIcon(tabId, false);
-  }
-
-  if (changeInfo.status === 'complete' && tab.url) {
-    // Check whitelist for auto-activation
-    try {
-      const hostname = new URL(tab.url).hostname;
-      const data = await chrome.storage.sync.get({ whitelist: [] });
-      if (data.whitelist.includes(hostname)) {
-        await activateRightClick(tabId);
-      }
-    } catch (e) { /* chrome:// URLs etc */ }
+    updateIcon(tabId, true);
   }
 });
 

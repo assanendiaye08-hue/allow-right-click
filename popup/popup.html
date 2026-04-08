@@ -16,16 +16,21 @@
       </div>
     </header>
 
-    <!-- Status Section -->
+    <!-- Right-Click Toggle -->
     <section class="section rc-section">
       <div class="toggle-row">
         <div class="toggle-info">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="20 6 9 17 4 12"/>
+            <path d="M4 4l7.07 17 2.51-7.39L21 11.07z"/>
           </svg>
-          <span class="toggle-label">Right-click, copy & paste enabled</span>
+          <span class="toggle-label">Allow Right Click</span>
         </div>
-        <span class="status-badge active">ALWAYS ON</span>
+        <div class="toggle-right">
+          <span id="toggle-status" class="status-badge active">ON</span>
+          <button id="toggle-btn" class="toggle-switch" aria-pressed="true" title="Toggle right-click protection bypass">
+            <span class="toggle-knob"></span>
+          </button>
+        </div>
       </div>
     </section>
 
