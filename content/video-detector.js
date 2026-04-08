@@ -229,7 +229,7 @@
     }
   }, 3000);
 
-  /* ── Handle Blob Fetch Requests from Service Worker ── */
+  /* ── Handle Messages from Service Worker ── */
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'fetch-blob' && msg.url) {
@@ -242,7 +242,112 @@
           reader.readAsDataURL(blob);
         })
         .catch(err => sendResponse({ error: err.message }));
-      return true; // async sendResponse
+      return true;
+    }
+
+    if (msg.type === 'download-via-page') {
+      // Download through the page context (inherits cookies/auth)
+      fetch(msg.url)
+        .then(res => res.blob())
+        .then(blob => {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = msg.filename || 'video.mp4';
+          a.style.display = 'none';
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+          sendResponse({ ok: true });
+        })
+        .catch(err => sendResponse({ error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'record-video') {
+      // Last resort for blob URLs: find the video element and record it
+      const videos = document.querySelectorAll('video');
+      let targetVideo = null;
+
+      // Find the video with the matching blob URL
+      for (const v of videos) {
+        if ((v.currentSrc || v.src) === msg.blobUrl) {
+          targetVideo = v;
+          break;
+        }
+      }
+
+      // If no exact match, use the largest playing video
+      if (!targetVideo) {
+        let maxArea = 0;
+        for (const v of videos) {
+          const area = v.videoWidth * v.videoHeight;
+          if (area > maxArea && !v.paused) {
+            maxArea = area;
+            targetVideo = v;
+          }
+        }
+      }
+
+      if (!targetVideo) {
+        // Pick the largest video element period
+        let maxArea = 0;
+        for (const v of videos) {
+          const area = (v.videoWidth || v.offsetWidth) * (v.videoHeight || v.offsetHeight);
+          if (area > maxArea) {
+            maxArea = area;
+            targetVideo = v;
+          }
+        }
+      }
+
+      if (targetVideo) {
+        try {
+          const stream = targetVideo.captureStream();
+          const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+          const chunks = [];
+
+          recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+          recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = (msg.filename || 'video').replace(/\.[^.]+$/, '') + '.webm';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+            sendResponse({ ok: true, method: 'record' });
+          };
+
+          // Play from start and record
+          const wasPlaying = !targetVideo.paused;
+          const origTime = targetVideo.currentTime;
+          targetVideo.currentTime = 0;
+          targetVideo.play();
+          recorder.start();
+
+          // Stop when video ends or after duration
+          targetVideo.addEventListener('ended', () => {
+            recorder.stop();
+            if (!wasPlaying) targetVideo.pause();
+          }, { once: true });
+
+          // Safety timeout
+          const duration = targetVideo.duration || 300;
+          setTimeout(() => {
+            if (recorder.state === 'recording') {
+              recorder.stop();
+              targetVideo.currentTime = origTime;
+              if (!wasPlaying) targetVideo.pause();
+            }
+          }, (duration + 2) * 1000);
+        } catch (e) {
+          sendResponse({ error: 'Recording failed: ' + e.message });
+        }
+      } else {
+        sendResponse({ error: 'No video element found' });
+      }
+      return true;
     }
   });
 

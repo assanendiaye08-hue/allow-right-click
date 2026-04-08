@@ -141,17 +141,21 @@ const VIDEO_URL_RE = /\.(mp4|webm|m3u8|mpd|ts|m4s|m4v|mkv|avi|flv|mov|ogg|ogv)(\
 const VIDEO_MIME_RE = /^(video\/|application\/x-mpegURL|application\/dash\+xml|application\/vnd\.apple\.mpegurl)/i;
 // Skip tiny segments and tracking pixels
 const SEGMENT_RE = /\.(ts|m4s)(\?|#|$)/i;
+// CDN patterns that serve video without file extensions (Twitter, Facebook, etc.)
+const VIDEO_CDN_RE = /\/(video|vid|amplify_video|ext_tw_video|tweet_video)\//i;
 
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     if (details.tabId < 0) return;
-    if (VIDEO_URL_RE.test(details.url)) {
-      // Skip individual TS/m4s segments — we want the m3u8/mpd manifest instead
-      if (SEGMENT_RE.test(details.url)) return;
+    const url = details.url;
+    // Skip individual TS/m4s segments — we want the m3u8/mpd manifest instead
+    if (SEGMENT_RE.test(url)) return;
+    // Match by file extension OR known video CDN URL patterns
+    if (VIDEO_URL_RE.test(url) || (details.type === 'media' && VIDEO_CDN_RE.test(url))) {
       addVideoToTab(details.tabId, {
-        url: details.url,
+        url,
         source: 'network',
-        type: classifyUrl(details.url),
+        type: classifyUrl(url),
         timestamp: Date.now()
       });
     }
@@ -240,9 +244,32 @@ async function initiateDownload(url, tab) {
       await downloadHLS(url, filename);
       return;
     }
-    chrome.downloads.download({ url, filename, saveAs: true });
+    // Try direct download first
+    try {
+      const downloadId = await new Promise((resolve, reject) => {
+        chrome.downloads.download({ url, filename, saveAs: true }, (id) => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve(id);
+        });
+      });
+      if (!downloadId) throw new Error('Download returned no ID');
+    } catch (e) {
+      console.warn('Direct download failed, trying via content script:', e.message);
+      // Fallback: download through the content script (has page cookies/auth)
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'download-via-page',
+          url,
+          filename
+        });
+      } catch (e2) {
+        console.error('Content script download also failed:', e2);
+      }
+    }
   } else if (url.startsWith('blob:')) {
-    // Ask content script to fetch the blob and convert to data URL
+    // Blob URLs from MediaSource can't be fetched directly.
+    // Strategy 1: Ask content script to fetch + convert to data URL
+    // Strategy 2: If that fails, ask content script to capture via MediaRecorder
     try {
       const response = await chrome.tabs.sendMessage(tab.id, {
         type: 'fetch-blob',
@@ -250,6 +277,24 @@ async function initiateDownload(url, tab) {
       });
       if (response?.dataUrl) {
         chrome.downloads.download({ url: response.dataUrl, filename, saveAs: true });
+      } else if (response?.error) {
+        console.warn('Blob fetch failed:', response.error);
+        // Fallback: try to find an HTTP URL for this video from our network cache
+        const state = getTabState(tab.id);
+        const httpVideo = Array.from(state.videos.values()).find(
+          v => v.source === 'network' && /^https?:\/\//i.test(v.url)
+        );
+        if (httpVideo) {
+          console.log('Found HTTP fallback URL:', httpVideo.url);
+          await initiateDownload(httpVideo.url, tab);
+        } else {
+          // Last resort: ask content script to record the video
+          await chrome.tabs.sendMessage(tab.id, {
+            type: 'record-video',
+            blobUrl: url,
+            filename
+          });
+        }
       }
     } catch (e) {
       console.error('Blob download failed:', e);

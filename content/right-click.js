@@ -216,7 +216,125 @@
     }
   }, true);
 
-  /* ── 7. Disable Message Listener ── */
+  /* ── 7. Google Docs Copy-Protection Bypass ── */
+  // Google Docs renders text on canvas and uses custom selection.
+  // When "Viewers can't copy" is enabled, the JS copy handler is blocked.
+  // The text content lives in hidden accessibility spans we can extract.
+
+  if (location.hostname === 'docs.google.com') {
+    // Add a "Copy All Text" button to the page for protected docs
+    const isViewOnly = !!document.querySelector('.docs-title-save-label-saving-disabled') ||
+                       document.querySelector('[aria-label="Document status: View only"]') !== null ||
+                       document.body.classList.contains('view-only-mode') ||
+                       !!document.querySelector('.app-viewmode');
+
+    // Extract text from Google Docs DOM structure
+    function extractGoogleDocsText() {
+      // Method 1: Get text from kix spans (Google Docs editor)
+      const kixSpans = document.querySelectorAll(
+        '.kix-wordhtmlgenerator-word-node, ' +
+        '.kix-lineview-text-block, ' +
+        '[class*="kix-lineview"] span'
+      );
+      if (kixSpans.length > 0) {
+        const lines = [];
+        let currentLine = '';
+        const lineViews = document.querySelectorAll('.kix-lineview');
+        if (lineViews.length > 0) {
+          lineViews.forEach(line => {
+            const text = line.textContent || '';
+            if (text.trim()) lines.push(text);
+          });
+        } else {
+          kixSpans.forEach(span => {
+            currentLine += span.textContent;
+          });
+          if (currentLine) lines.push(currentLine);
+        }
+        return lines.join('\n');
+      }
+
+      // Method 2: Get text from the document content wrapper
+      const contentWrapper = document.querySelector(
+        '.kix-appview-editor, ' +
+        '.docs-texteventtarget-iframe, ' +
+        '[contenteditable="true"]'
+      );
+      if (contentWrapper) {
+        return contentWrapper.textContent || '';
+      }
+
+      // Method 3: Try getting from accessibility tree
+      const pages = document.querySelectorAll('.kix-page');
+      if (pages.length > 0) {
+        return Array.from(pages).map(p => p.textContent).join('\n\n');
+      }
+
+      return '';
+    }
+
+    // Override Ctrl+C / Cmd+C to actually copy the selected/all text
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        const selection = window.getSelection();
+        let text = selection?.toString();
+
+        if (!text || text.trim() === '') {
+          // No selection — try extracting from Google Docs DOM
+          text = extractGoogleDocsText();
+        }
+
+        if (text && text.trim()) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          navigator.clipboard.writeText(text).catch(() => {
+            // Fallback: use textarea trick
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+          });
+        }
+      }
+    }, true);
+
+    // Also hook Ctrl+A to select all text visually
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        // Let the default Ctrl+A work, but also make sure text is selectable
+        const pages = document.querySelectorAll('.kix-page-content-wrapper, .kix-page');
+        pages.forEach(p => {
+          p.style.setProperty('user-select', 'text', 'important');
+          p.style.setProperty('-webkit-user-select', 'text', 'important');
+        });
+      }
+    }, true);
+
+    // Make the Google Docs content selectable
+    const docsStyle = document.createElement('style');
+    docsStyle.textContent = `
+      .kix-page-content-wrapper,
+      .kix-page,
+      .kix-lineview,
+      .kix-wordhtmlgenerator-word-node,
+      .kix-paragraphrenderer,
+      .kix-lineview-text-block {
+        user-select: text !important;
+        -webkit-user-select: text !important;
+        pointer-events: auto !important;
+      }
+      .kix-selection-overlay {
+        pointer-events: none !important;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(docsStyle);
+    cleanups.push(() => docsStyle.remove());
+  }
+
+  /* ── 8. Disable Message Listener ── */
 
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'disable-right-click') {

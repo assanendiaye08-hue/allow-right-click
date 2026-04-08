@@ -10,6 +10,12 @@
 
   const VIDEO_URL_RE = /\.(mp4|webm|m3u8|mpd|m4v|ogg|ogv|mov|mkv|flv|avi)(\?|#|$)/i;
   const VIDEO_MIME_RE = /^(video\/|application\/x-mpegURL|application\/dash\+xml|application\/vnd\.apple\.mpegurl)/i;
+  // CDN paths that serve video without file extensions (Twitter, FB, etc.)
+  const VIDEO_CDN_RE = /\/(video|vid|amplify_video|ext_tw_video|tweet_video)\//i;
+
+  function isVideoUrl(url) {
+    return VIDEO_URL_RE.test(url) || VIDEO_CDN_RE.test(url);
+  }
 
   function reportUrl(url) {
     if (!url || typeof url !== 'string') return;
@@ -25,7 +31,7 @@
     try {
       const url = typeof input === 'string' ? input
         : (input instanceof Request ? input.url : String(input));
-      if (VIDEO_URL_RE.test(url)) {
+      if (isVideoUrl(url)) {
         reportUrl(url);
       }
     } catch (e) { /* ignore */ }
@@ -38,7 +44,7 @@
   XMLHttpRequest.prototype.open = function (method, url) {
     try {
       const urlStr = typeof url === 'string' ? url : String(url);
-      if (VIDEO_URL_RE.test(urlStr)) {
+      if (isVideoUrl(urlStr)) {
         reportUrl(urlStr);
       }
     } catch (e) { /* ignore */ }
