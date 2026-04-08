@@ -235,6 +235,11 @@
   /* ── Handle Messages from Service Worker ── */
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type === 'get-page-url') {
+      sendResponse({ url: location.href });
+      return;
+    }
+
     if (msg.type === 'fetch-blob' && msg.url) {
       fetch(msg.url)
         .then(res => res.blob())

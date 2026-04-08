@@ -236,74 +236,93 @@ function updateBadge(tabId) {
 
 /* ─── Downloads ─── */
 
+// Sites that need cobalt.tools for download (encrypted/DRM/complex formats)
+const COBALT_SITES = /youtube\.com|youtu\.be|tiktok\.com|soundcloud\.com|twitch\.tv|dailymotion\.com|bilibili\.com/i;
+// Sites where our API interception finds progressive MP4 URLs
+const API_INTERCEPT_SITES = /twitter\.com|x\.com|instagram\.com|facebook\.com|fbcdn\.net/i;
+
+async function openCobaltWithUrl(videoUrl, tab) {
+  const cobaltTab = await chrome.tabs.create({
+    url: 'https://cobalt.tools/',
+    index: tab.index + 1
+  });
+  chrome.tabs.onUpdated.addListener(function cobaltReady(tabId, changeInfo) {
+    if (tabId === cobaltTab.id && changeInfo.status === 'complete') {
+      chrome.tabs.onUpdated.removeListener(cobaltReady);
+      chrome.scripting.executeScript({
+        target: { tabId: cobaltTab.id },
+        func: (url) => {
+          const tryFill = (attempts) => {
+            const input = document.querySelector('input');
+            if (input) {
+              const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+              setter.call(input, url);
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+            } else if (attempts > 0) {
+              setTimeout(() => tryFill(attempts - 1), 500);
+            }
+          };
+          tryFill(10);
+        },
+        args: [videoUrl]
+      });
+    }
+  });
+}
+
 async function initiateDownload(url, tab) {
   const filename = generateFilename(url, tab);
+  const pageUrl = tab.url || '';
 
-  // First: find the HIGHEST QUALITY progressive (complete) MP4 from API parsing
-  const state = getTabState(tab.id);
-  const progressiveVideos = Array.from(state.videos.values())
-    .filter(v => v.progressive && /^https?:\/\//i.test(v.url) && /\.mp4/i.test(v.url))
-    .sort((a, b) => {
-      // Sort by bitrate first (if available)
-      const brDiff = (b.bitrate || 0) - (a.bitrate || 0);
-      if (brDiff !== 0) return brDiff;
-      // Fallback: extract resolution from URL path (e.g. /1280x720/)
-      const resA = getUrlResolution(a.url);
-      const resB = getUrlResolution(b.url);
-      return resB - resA;
-    });
-  const progressiveVideo = progressiveVideos[0] || null;
-
-  if (/^https?:\/\//i.test(url) || progressiveVideo) {
-    // Prefer progressive URL if available (complete file from API)
-    const downloadUrl = progressiveVideo ? progressiveVideo.url : url;
-    const dlFilename = progressiveVideo ? generateFilename(progressiveVideo.url, tab) : filename;
-
-    // Download via content script fetch — inherits page cookies & auth
-    try {
-      const result = await chrome.tabs.sendMessage(tab.id, {
-        type: 'download-via-page', url: downloadUrl, filename: dlFilename
-      });
-      // If content script reports file too small, it's a DASH fragment
-      if (result?.error) {
-        console.warn('Download-via-page failed:', result.error);
-        // Try MediaRecorder as fallback
-        await chrome.tabs.sendMessage(tab.id, {
-          type: 'record-video', blobUrl: url, filename: dlFilename
-        });
-      }
-    } catch (e) {
-      // Fallback: chrome.downloads directly
-      console.warn('Page download failed, trying direct:', e.message);
-      chrome.downloads.download({ url: downloadUrl, filename: dlFilename, saveAs: true });
-    }
+  // Strategy 1: YouTube and similar (encrypted URLs) → open cobalt.tools and auto-fill
+  if (COBALT_SITES.test(pageUrl)) {
+    await openCobaltWithUrl(pageUrl, tab);
     return;
   }
 
-  if (url.startsWith('blob:')) {
-    // First: check for a progressive HTTP URL from API parsing
+  // Strategy 2: Twitter/FB/IG — use progressive MP4 from API interception
+  if (API_INTERCEPT_SITES.test(pageUrl) || API_INTERCEPT_SITES.test(url)) {
+    const state = getTabState(tab.id);
+    const progressiveVideo = Array.from(state.videos.values())
+      .filter(v => v.progressive && /^https?:\/\//i.test(v.url) && /\.mp4/i.test(v.url))
+      .sort((a, b) => {
+        const brDiff = (b.bitrate || 0) - (a.bitrate || 0);
+        if (brDiff !== 0) return brDiff;
+        return getUrlResolution(b.url) - getUrlResolution(a.url);
+      })[0];
+
     if (progressiveVideo) {
       try {
-        await chrome.tabs.sendMessage(tab.id, {
-          type: 'download-via-page', url: progressiveVideo.url, filename
+        const result = await chrome.tabs.sendMessage(tab.id, {
+          type: 'download-via-page', url: progressiveVideo.url,
+          filename: generateFilename(progressiveVideo.url, tab)
         });
-        return;
+        if (!result?.error) return;
       } catch (e) { /* failed */ }
     }
 
-    // Try finding any direct HTTP URL
-    const directVideo = Array.from(state.videos.values()).find(
-      v => /^https?:\/\//i.test(v.url) && /\.(mp4|webm)/i.test(v.url)
-    );
-    if (directVideo) {
-      try {
-        await chrome.tabs.sendMessage(tab.id, {
-          type: 'download-via-page', url: directVideo.url, filename
-        });
-        return;
-      } catch (e) { /* failed */ }
-    }
+    // Fallback: open cobalt.tools with auto-fill
+    await openCobaltWithUrl(pageUrl, tab);
+    return;
+  }
 
+  // Strategy 3: Direct HTTP URL — download via content script (inherits cookies)
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      const result = await chrome.tabs.sendMessage(tab.id, {
+        type: 'download-via-page', url, filename
+      });
+      if (!result?.error) return;
+    } catch (e) { /* failed */ }
+
+    // Direct chrome.downloads fallback
+    chrome.downloads.download({ url, filename, saveAs: true });
+    return;
+  }
+
+  // Strategy 4: Blob URL
+  if (url.startsWith('blob:')) {
     // Try fetching the blob directly
     try {
       const response = await chrome.tabs.sendMessage(tab.id, {
@@ -313,7 +332,7 @@ async function initiateDownload(url, tab) {
         chrome.downloads.download({ url: response.dataUrl, filename, saveAs: true });
         return;
       }
-    } catch (e) { /* blob fetch failed */ }
+    } catch (e) { /* failed */ }
 
     // Last resort: MediaRecorder
     try {
