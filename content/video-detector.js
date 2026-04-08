@@ -303,15 +303,19 @@
       if (targetVideo) {
         try {
           const stream = targetVideo.captureStream();
-          const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+          // Prefer MP4 if supported, fall back to WebM
+          const mimeType = MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')
+            ? 'video/mp4;codecs=avc1' : 'video/webm';
+          const ext = mimeType.startsWith('video/mp4') ? '.mp4' : '.webm';
+          const recorder = new MediaRecorder(stream, { mimeType });
           const chunks = [];
 
           recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
           recorder.onstop = () => {
-            const blob = new Blob(chunks, { type: 'video/webm' });
+            const blob = new Blob(chunks, { type: mimeType.split(';')[0] });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = (msg.filename || 'video').replace(/\.[^.]+$/, '') + '.webm';
+            a.download = (msg.filename || 'video').replace(/\.[^.]+$/, '') + ext;
             a.style.display = 'none';
             document.body.appendChild(a);
             a.click();

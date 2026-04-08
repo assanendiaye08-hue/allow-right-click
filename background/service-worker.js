@@ -239,9 +239,24 @@ async function initiateDownload(url, tab) {
   const filename = generateFilename(url, tab);
 
   if (/^https?:\/\//i.test(url)) {
-    // Check if it's an HLS manifest
+    // For HLS manifests: find a direct MP4 URL instead, or record the video
     if (/\.m3u8/i.test(url)) {
-      await downloadHLS(url, filename);
+      // Look for a direct MP4/WebM URL we already detected on this tab
+      const state = getTabState(tab.id);
+      const directVideo = Array.from(state.videos.values()).find(
+        v => /^https?:\/\//i.test(v.url) && /\.(mp4|webm)/i.test(v.url)
+      );
+      if (directVideo) {
+        // Use the direct URL instead — produces a real MP4 file
+        await initiateDownload(directVideo.url, tab);
+      } else {
+        // No direct URL available — record the video via content script
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'record-video',
+          blobUrl: url,
+          filename: filename.replace(/\.[^.]+$/, '.mp4')
+        });
+      }
       return;
     }
     // Try direct download first
@@ -267,9 +282,18 @@ async function initiateDownload(url, tab) {
       }
     }
   } else if (url.startsWith('blob:')) {
-    // Blob URLs from MediaSource can't be fetched directly.
-    // Strategy 1: Ask content script to fetch + convert to data URL
-    // Strategy 2: If that fails, ask content script to capture via MediaRecorder
+    // Blob URLs from MediaSource can't always be fetched directly.
+    // Strategy 1: Try to find a direct HTTP MP4 URL from our network cache
+    const state = getTabState(tab.id);
+    const directVideo = Array.from(state.videos.values()).find(
+      v => v.source === 'network' && /^https?:\/\//i.test(v.url) && !/\.m3u8/i.test(v.url)
+    );
+    if (directVideo) {
+      await initiateDownload(directVideo.url, tab);
+      return;
+    }
+
+    // Strategy 2: Ask content script to fetch + convert to data URL
     try {
       const response = await chrome.tabs.sendMessage(tab.id, {
         type: 'fetch-blob',
@@ -279,22 +303,12 @@ async function initiateDownload(url, tab) {
         chrome.downloads.download({ url: response.dataUrl, filename, saveAs: true });
       } else if (response?.error) {
         console.warn('Blob fetch failed:', response.error);
-        // Fallback: try to find an HTTP URL for this video from our network cache
-        const state = getTabState(tab.id);
-        const httpVideo = Array.from(state.videos.values()).find(
-          v => v.source === 'network' && /^https?:\/\//i.test(v.url)
-        );
-        if (httpVideo) {
-          console.log('Found HTTP fallback URL:', httpVideo.url);
-          await initiateDownload(httpVideo.url, tab);
-        } else {
-          // Last resort: ask content script to record the video
-          await chrome.tabs.sendMessage(tab.id, {
-            type: 'record-video',
-            blobUrl: url,
-            filename
-          });
-        }
+        // Strategy 3: Record the video via MediaRecorder
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'record-video',
+          blobUrl: url,
+          filename
+        });
       }
     } catch (e) {
       console.error('Blob download failed:', e);
@@ -304,62 +318,6 @@ async function initiateDownload(url, tab) {
   }
 }
 
-async function downloadHLS(m3u8Url, filename) {
-  try {
-    const resp = await fetch(m3u8Url);
-    const text = await resp.text();
-    const baseUrl = m3u8Url.substring(0, m3u8Url.lastIndexOf('/') + 1);
-    const parsed = parseM3U8(text, baseUrl);
-
-    if (parsed.isMaster && parsed.variants.length > 0) {
-      // Pick highest bandwidth variant
-      const best = parsed.variants[0];
-      const variantResp = await fetch(best.url);
-      const variantText = await variantResp.text();
-      const variantBase = best.url.substring(0, best.url.lastIndexOf('/') + 1);
-      const media = parseM3U8(variantText, variantBase);
-      await downloadSegments(media.segments, filename);
-    } else if (parsed.segments.length > 0) {
-      await downloadSegments(parsed.segments, filename);
-    }
-  } catch (e) {
-    console.error('HLS download failed:', e);
-  }
-}
-
-async function downloadSegments(segments, filename) {
-  const buffers = [];
-  const batchSize = 5;
-
-  for (let i = 0; i < segments.length; i += batchSize) {
-    const batch = segments.slice(i, i + batchSize);
-    const results = await Promise.all(
-      batch.map(async (seg) => {
-        const resp = await fetch(seg.url);
-        return resp.arrayBuffer();
-      })
-    );
-    buffers.push(...results);
-  }
-
-  // Concatenate all buffers
-  const totalSize = buffers.reduce((s, b) => s + b.byteLength, 0);
-  const combined = new Uint8Array(totalSize);
-  let offset = 0;
-  for (const buf of buffers) {
-    combined.set(new Uint8Array(buf), offset);
-    offset += buf.byteLength;
-  }
-
-  // Convert to data URL for download
-  const blob = new Blob([combined], { type: 'video/mp4' });
-  const reader = new FileReader();
-  reader.onloadend = () => {
-    const tsFilename = filename.replace(/\.[^.]+$/, '.mp4');
-    chrome.downloads.download({ url: reader.result, filename: tsFilename, saveAs: true });
-  };
-  reader.readAsDataURL(blob);
-}
 
 // Inline lightweight M3U8 parser for service worker
 function parseM3U8(text, baseUrl) {
