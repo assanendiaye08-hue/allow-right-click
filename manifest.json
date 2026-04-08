@@ -37,6 +37,13 @@
       "run_at": "document_end",
       "all_frames": true,
       "world": "MAIN"
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["content/video-detector-main.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
     }
   ],
   "action": {

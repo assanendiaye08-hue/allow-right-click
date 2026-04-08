@@ -330,33 +330,26 @@
             sendResponse({ ok: true, method: 'record' });
           };
 
-          // Mute to avoid sound while recording, speed up playback
-          const origVolume = targetVideo.volume;
+          // Mute to avoid sound while recording
           const origMuted = targetVideo.muted;
-          const origRate = targetVideo.playbackRate;
           targetVideo.muted = true;
-          targetVideo.playbackRate = 16; // 16x speed — 1hr video in ~4min
           targetVideo.currentTime = 0;
           targetVideo.play();
-          recorder.start(1000); // collect data every second
+          recorder.start(1000);
 
           targetVideo.addEventListener('ended', () => {
             recorder.stop();
-            targetVideo.volume = origVolume;
             targetVideo.muted = origMuted;
-            targetVideo.playbackRate = origRate;
           }, { once: true });
 
-          // Safety timeout (duration/playbackRate + buffer)
+          // Safety timeout
           const duration = targetVideo.duration || 3600;
-          const timeoutMs = ((duration / 16) + 10) * 1000;
           setTimeout(() => {
             if (recorder.state === 'recording') {
               recorder.stop();
               targetVideo.muted = origMuted;
-              targetVideo.playbackRate = origRate;
             }
-          }, timeoutMs);
+          }, (duration + 5) * 1000);
         } catch (e) {
           sendResponse({ error: 'Recording failed: ' + e.message });
         }
@@ -367,16 +360,8 @@
     }
   });
 
-  /* ── Inject MAIN World Script ── */
-
-  try {
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('content/video-detector-main.js');
-    (document.head || document.documentElement).appendChild(script);
-    script.onload = () => script.remove();
-  } catch (e) { /* web_accessible_resources not configured */ }
-
   /* ── Listen for Messages from MAIN World ── */
+  /* video-detector-main.js is injected via manifest at document_start */
 
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
