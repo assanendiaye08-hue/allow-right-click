@@ -243,7 +243,15 @@ async function initiateDownload(url, tab) {
   const state = getTabState(tab.id);
   const progressiveVideos = Array.from(state.videos.values())
     .filter(v => v.progressive && /^https?:\/\//i.test(v.url) && /\.mp4/i.test(v.url))
-    .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+    .sort((a, b) => {
+      // Sort by bitrate first (if available)
+      const brDiff = (b.bitrate || 0) - (a.bitrate || 0);
+      if (brDiff !== 0) return brDiff;
+      // Fallback: extract resolution from URL path (e.g. /1280x720/)
+      const resA = getUrlResolution(a.url);
+      const resB = getUrlResolution(b.url);
+      return resB - resA;
+    });
   const progressiveVideo = progressiveVideos[0] || null;
 
   if (/^https?:\/\//i.test(url) || progressiveVideo) {
@@ -368,6 +376,13 @@ function resolveUrl(url, baseUrl) {
   if (!url) return '';
   if (/^https?:\/\//i.test(url)) return url;
   try { return new URL(url, baseUrl).href; } catch { return url; }
+}
+
+function getUrlResolution(url) {
+  // Extract resolution from URL path like /1280x720/ or /720x1280/
+  const match = url.match(/\/(\d{3,4})x(\d{3,4})\//);
+  if (match) return parseInt(match[1]) * parseInt(match[2]);
+  return 0;
 }
 
 function generateFilename(url, tab) {
