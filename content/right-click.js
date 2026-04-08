@@ -93,10 +93,6 @@
       const s = getComputedStyle(el);
       if (s.position !== 'fixed' && s.position !== 'absolute') continue;
 
-      const isLargeEnough = el.offsetWidth > window.innerWidth * 0.4 &&
-                            el.offsetHeight > window.innerHeight * 0.4;
-      if (!isLargeEnough) continue;
-
       const opacity = parseFloat(s.opacity);
       const bg = s.backgroundColor;
       const isTransparent = opacity === 0 ||
@@ -104,7 +100,19 @@
         bg === 'rgba(0, 0, 0, 0)' ||
         (opacity < 0.05 && el.children.length === 0);
 
-      if (isTransparent) {
+      if (!isTransparent) continue;
+
+      // Large overlays covering the page
+      const isLargeEnough = el.offsetWidth > window.innerWidth * 0.4 &&
+                            el.offsetHeight > window.innerHeight * 0.4;
+
+      // Overlays sitting on top of media (video, img, canvas)
+      const parent = el.parentElement;
+      const coversMedia = parent && (
+        parent.querySelector('video, img, canvas, picture') !== null
+      );
+
+      if (isLargeEnough || coversMedia) {
         el.style.setProperty('pointer-events', 'none', 'important');
       }
     }
