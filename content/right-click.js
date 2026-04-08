@@ -217,121 +217,231 @@
   }, true);
 
   /* ── 7. Google Docs Copy-Protection Bypass ── */
-  // Google Docs renders text on canvas and uses custom selection.
-  // When "Viewers can't copy" is enabled, the JS copy handler is blocked.
-  // The text content lives in hidden accessibility spans we can extract.
+  // Google Docs renders text on CANVAS — DOM extraction doesn't work.
+  // The working approach: redirect to /mobilebasic view which renders
+  // as plain HTML where our normal copy/select unblocking works.
+  // Also fetch doc content via export URL as a fallback.
 
   if (location.hostname === 'docs.google.com') {
-    // Add a "Copy All Text" button to the page for protected docs
-    const isViewOnly = !!document.querySelector('.docs-title-save-label-saving-disabled') ||
-                       document.querySelector('[aria-label="Document status: View only"]') !== null ||
-                       document.body.classList.contains('view-only-mode') ||
-                       !!document.querySelector('.app-viewmode');
+    const docIdMatch = location.pathname.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+    const docId = docIdMatch ? docIdMatch[1] : null;
+    const isMobileBasic = location.pathname.includes('/mobilebasic');
 
-    // Extract text from Google Docs DOM structure
-    function extractGoogleDocsText() {
-      // Method 1: Get text from kix spans (Google Docs editor)
-      const kixSpans = document.querySelectorAll(
-        '.kix-wordhtmlgenerator-word-node, ' +
-        '.kix-lineview-text-block, ' +
-        '[class*="kix-lineview"] span'
-      );
-      if (kixSpans.length > 0) {
-        const lines = [];
-        let currentLine = '';
-        const lineViews = document.querySelectorAll('.kix-lineview');
-        if (lineViews.length > 0) {
-          lineViews.forEach(line => {
-            const text = line.textContent || '';
-            if (text.trim()) lines.push(text);
-          });
-        } else {
-          kixSpans.forEach(span => {
-            currentLine += span.textContent;
-          });
-          if (currentLine) lines.push(currentLine);
+    // On /mobilebasic view: just make sure copy/select works (our CSS already handles this)
+    if (isMobileBasic) {
+      const mbStyle = document.createElement('style');
+      mbStyle.textContent = `
+        * {
+          -webkit-user-select: text !important;
+          user-select: text !important;
+          pointer-events: auto !important;
         }
-        return lines.join('\n');
-      }
-
-      // Method 2: Get text from the document content wrapper
-      const contentWrapper = document.querySelector(
-        '.kix-appview-editor, ' +
-        '.docs-texteventtarget-iframe, ' +
-        '[contenteditable="true"]'
-      );
-      if (contentWrapper) {
-        return contentWrapper.textContent || '';
-      }
-
-      // Method 3: Try getting from accessibility tree
-      const pages = document.querySelectorAll('.kix-page');
-      if (pages.length > 0) {
-        return Array.from(pages).map(p => p.textContent).join('\n\n');
-      }
-
-      return '';
+        body { cursor: text !important; }
+      `;
+      (document.head || document.documentElement).appendChild(mbStyle);
+      cleanups.push(() => mbStyle.remove());
     }
 
-    // Override Ctrl+C / Cmd+C to actually copy the selected/all text
-    document.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-        const selection = window.getSelection();
-        let text = selection?.toString();
+    // On normal /edit or /preview view: add helper UI
+    if (docId && !isMobileBasic) {
+      // Wait for the page to load before adding UI
+      const addDocsUI = () => {
+        // Don't add twice
+        if (document.getElementById('__arc-gdocs-bar')) return;
 
-        if (!text || text.trim() === '') {
-          // No selection — try extracting from Google Docs DOM
-          text = extractGoogleDocsText();
-        }
+        // Create a floating bar at the top
+        const bar = document.createElement('div');
+        bar.id = '__arc-gdocs-bar';
+        bar.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 50%;
+          transform: translateX(-50%);
+          z-index: 2147483647;
+          background: #1a1a2e;
+          color: #e0e0e0;
+          padding: 8px 16px;
+          border-radius: 0 0 10px 10px;
+          font-family: -apple-system, sans-serif;
+          font-size: 13px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+          border: 1px solid #2a2a4a;
+          border-top: none;
+        `;
 
-        if (text && text.trim()) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          navigator.clipboard.writeText(text).catch(() => {
-            // Fallback: use textarea trick
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand('copy');
-            ta.remove();
-          });
-        }
-      }
-    }, true);
+        const label = document.createElement('span');
+        label.textContent = 'Copy protected — ';
+        label.style.color = '#888';
 
-    // Also hook Ctrl+A to select all text visually
-    document.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-        // Let the default Ctrl+A work, but also make sure text is selectable
-        const pages = document.querySelectorAll('.kix-page-content-wrapper, .kix-page');
-        pages.forEach(p => {
-          p.style.setProperty('user-select', 'text', 'important');
-          p.style.setProperty('-webkit-user-select', 'text', 'important');
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = 'Copy All Text';
+        copyBtn.style.cssText = `
+          background: #e94560;
+          color: white;
+          border: none;
+          padding: 5px 14px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 600;
+        `;
+        copyBtn.addEventListener('click', async () => {
+          copyBtn.textContent = 'Fetching...';
+          const text = await fetchDocText(docId);
+          if (text) {
+            await copyToClipboard(text);
+            copyBtn.textContent = 'Copied!';
+            copyBtn.style.background = '#4ade80';
+          } else {
+            copyBtn.textContent = 'Failed — try Mobile View';
+            copyBtn.style.background = '#666';
+          }
+          setTimeout(() => {
+            copyBtn.textContent = 'Copy All Text';
+            copyBtn.style.background = '#e94560';
+          }, 3000);
         });
-      }
-    }, true);
 
-    // Make the Google Docs content selectable
-    const docsStyle = document.createElement('style');
-    docsStyle.textContent = `
-      .kix-page-content-wrapper,
-      .kix-page,
-      .kix-lineview,
-      .kix-wordhtmlgenerator-word-node,
-      .kix-paragraphrenderer,
-      .kix-lineview-text-block {
-        user-select: text !important;
-        -webkit-user-select: text !important;
-        pointer-events: auto !important;
+        const mobileBtn = document.createElement('button');
+        mobileBtn.textContent = 'Open Mobile View';
+        mobileBtn.title = 'Opens a copyable plain-text version of this document';
+        mobileBtn.style.cssText = `
+          background: transparent;
+          color: #60a5fa;
+          border: 1px solid #60a5fa;
+          padding: 5px 14px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 500;
+        `;
+        mobileBtn.addEventListener('click', () => {
+          window.open(
+            `https://docs.google.com/document/d/${docId}/mobilebasic`,
+            '_blank'
+          );
+        });
+
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '\u00d7';
+        closeBtn.style.cssText = `
+          background: none;
+          border: none;
+          color: #666;
+          font-size: 18px;
+          cursor: pointer;
+          padding: 0 4px;
+          margin-left: 4px;
+        `;
+        closeBtn.addEventListener('click', () => bar.remove());
+
+        bar.appendChild(label);
+        bar.appendChild(copyBtn);
+        bar.appendChild(mobileBtn);
+        bar.appendChild(closeBtn);
+        document.body.appendChild(bar);
+        cleanups.push(() => bar.remove());
+      };
+
+      // Fetch document text via multiple methods
+      async function fetchDocText(id) {
+        // Method 1: Export as plain text
+        try {
+          const resp = await fetch(
+            `https://docs.google.com/document/d/${id}/export?format=txt`,
+            { credentials: 'include' }
+          );
+          if (resp.ok) {
+            const text = await resp.text();
+            if (text && text.length > 10) return text;
+          }
+        } catch (e) { /* blocked */ }
+
+        // Method 2: Export as HTML and extract text
+        try {
+          const resp = await fetch(
+            `https://docs.google.com/document/d/${id}/export?format=html`,
+            { credentials: 'include' }
+          );
+          if (resp.ok) {
+            const html = await resp.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const text = doc.body?.textContent;
+            if (text && text.length > 10) return text;
+          }
+        } catch (e) { /* blocked */ }
+
+        // Method 3: Fetch mobilebasic and extract text
+        try {
+          const resp = await fetch(
+            `https://docs.google.com/document/d/${id}/mobilebasic`,
+            { credentials: 'include' }
+          );
+          if (resp.ok) {
+            const html = await resp.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const text = doc.body?.textContent;
+            if (text && text.length > 10) return text;
+          }
+        } catch (e) { /* blocked */ }
+
+        // Method 4: Try extracting from current DOM (kix spans, accessibility)
+        const kixLines = document.querySelectorAll('.kix-lineview');
+        if (kixLines.length > 0) {
+          const text = Array.from(kixLines).map(l => l.textContent).join('\n');
+          if (text.trim().length > 0) return text;
+        }
+
+        const pages = document.querySelectorAll('.kix-page');
+        if (pages.length > 0) {
+          const text = Array.from(pages).map(p => p.textContent).join('\n\n');
+          if (text.trim().length > 0) return text;
+        }
+
+        return null;
       }
-      .kix-selection-overlay {
-        pointer-events: none !important;
+
+      async function copyToClipboard(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch (e) {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+        }
       }
-    `;
-    (document.head || document.documentElement).appendChild(docsStyle);
-    cleanups.push(() => docsStyle.remove());
+
+      // Add UI after page loads
+      if (document.readyState === 'complete') {
+        setTimeout(addDocsUI, 1000);
+      } else {
+        window.addEventListener('load', () => setTimeout(addDocsUI, 1000), { once: true });
+      }
+
+      // Also try Ctrl+C override using fetched content
+      document.addEventListener('keydown', async (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+          const selection = window.getSelection()?.toString();
+          if (!selection || selection.trim() === '') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            const text = await fetchDocText(docId);
+            if (text) {
+              await copyToClipboard(text);
+            }
+          }
+        }
+      }, true);
+    }
   }
 
   /* ── 8. Disable Message Listener ── */
