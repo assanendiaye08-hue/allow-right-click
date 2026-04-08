@@ -1,6 +1,6 @@
 /* ─── Allow Right Click — ISOLATED World Content Script ─── */
 /* Handles CSS overrides, DOM attribute cleanup, and overlay removal.
-   Injected dynamically when the user activates the feature. */
+   Always active on every page via manifest content_scripts. */
 
 (function () {
   'use strict';

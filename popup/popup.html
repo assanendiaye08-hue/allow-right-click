@@ -14,37 +14,18 @@
         <img src="../icons/icon-32.png" alt="" class="header-icon">
         <h1>ARC + Video Saver</h1>
       </div>
-      <button id="settings-btn" class="icon-btn" title="Settings">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-      </button>
     </header>
 
-    <!-- Right-Click Section -->
+    <!-- Status Section -->
     <section class="section rc-section">
       <div class="toggle-row">
         <div class="toggle-info">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 4l7.07 17 2.51-7.39L21 11.07z"/>
+            <polyline points="20 6 9 17 4 12"/>
           </svg>
-          <span class="toggle-label">Allow Right Click</span>
+          <span class="toggle-label">Right-click, copy & paste enabled</span>
         </div>
-        <div class="toggle-right">
-          <span id="toggle-status" class="status-badge inactive">OFF</span>
-          <button id="toggle-btn" class="toggle-switch" aria-pressed="false" title="Toggle right-click on this tab">
-            <span class="toggle-knob"></span>
-          </button>
-        </div>
-      </div>
-      <div class="rc-actions">
-        <button id="whitelist-btn" class="text-btn" title="Auto-enable on this site">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-          </svg>
-          Add to whitelist
-        </button>
+        <span class="status-badge active">ALWAYS ON</span>
       </div>
     </section>
 
@@ -77,23 +58,6 @@
       </div>
     </section>
 
-    <!-- Settings Panel -->
-    <section id="settings-panel" class="settings-panel hidden">
-      <div class="settings-header">
-        <h2>Settings</h2>
-        <button id="settings-close" class="icon-btn" title="Close settings">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
-      </div>
-      <div class="setting-group">
-        <label>Whitelisted Domains</label>
-        <p class="setting-hint">Right-click is automatically enabled on these sites</p>
-        <textarea id="whitelist-textarea" rows="5" placeholder="example.com&#10;another-site.org" spellcheck="false"></textarea>
-      </div>
-      <button id="save-settings" class="primary-btn">Save Settings</button>
-    </section>
   </div>
 
   <script src="popup.js"></script>

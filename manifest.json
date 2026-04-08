@@ -24,15 +24,28 @@
       "js": ["content/video-detector.js"],
       "run_at": "document_idle",
       "all_frames": true
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["content/right-click.js"],
+      "run_at": "document_end",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*/*"],
+      "js": ["content/right-click-main.js"],
+      "run_at": "document_end",
+      "all_frames": true,
+      "world": "MAIN"
     }
   ],
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
-      "16": "icons/icon-16-gray.png",
-      "32": "icons/icon-32-gray.png",
-      "48": "icons/icon-48-gray.png",
-      "128": "icons/icon-128-gray.png"
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
     }
   },
   "icons": {
