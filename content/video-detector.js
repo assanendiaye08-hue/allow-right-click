@@ -250,6 +250,13 @@
       fetch(msg.url)
         .then(res => res.blob())
         .then(blob => {
+          // If file is suspiciously small (< 50KB), it's likely a DASH init
+          // segment, not a real video. Report failure so service worker can
+          // try the next strategy.
+          if (blob.size < 50000) {
+            sendResponse({ error: 'File too small (' + blob.size + ' bytes) — likely a DASH segment, not a full video' });
+            return;
+          }
           const a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
           a.download = msg.filename || 'video.mp4';
@@ -257,7 +264,7 @@
           document.body.appendChild(a);
           a.click();
           setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-          sendResponse({ ok: true });
+          sendResponse({ ok: true, size: blob.size });
         })
         .catch(err => sendResponse({ error: err.message }));
       return true;
@@ -323,28 +330,33 @@
             sendResponse({ ok: true, method: 'record' });
           };
 
-          // Play from start and record
-          const wasPlaying = !targetVideo.paused;
-          const origTime = targetVideo.currentTime;
+          // Mute to avoid sound while recording, speed up playback
+          const origVolume = targetVideo.volume;
+          const origMuted = targetVideo.muted;
+          const origRate = targetVideo.playbackRate;
+          targetVideo.muted = true;
+          targetVideo.playbackRate = 16; // 16x speed — 1hr video in ~4min
           targetVideo.currentTime = 0;
           targetVideo.play();
-          recorder.start();
+          recorder.start(1000); // collect data every second
 
-          // Stop when video ends or after duration
           targetVideo.addEventListener('ended', () => {
             recorder.stop();
-            if (!wasPlaying) targetVideo.pause();
+            targetVideo.volume = origVolume;
+            targetVideo.muted = origMuted;
+            targetVideo.playbackRate = origRate;
           }, { once: true });
 
-          // Safety timeout
-          const duration = targetVideo.duration || 300;
+          // Safety timeout (duration/playbackRate + buffer)
+          const duration = targetVideo.duration || 3600;
+          const timeoutMs = ((duration / 16) + 10) * 1000;
           setTimeout(() => {
             if (recorder.state === 'recording') {
               recorder.stop();
-              targetVideo.currentTime = origTime;
-              if (!wasPlaying) targetVideo.pause();
+              targetVideo.muted = origMuted;
+              targetVideo.playbackRate = origRate;
             }
-          }, (duration + 2) * 1000);
+          }, timeoutMs);
         } catch (e) {
           sendResponse({ error: 'Recording failed: ' + e.message });
         }

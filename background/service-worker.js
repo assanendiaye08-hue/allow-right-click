@@ -137,21 +137,21 @@ function updateIcon(tabId, active) {
 
 /* ─── Video Detection from Network Requests ─── */
 
-const VIDEO_URL_RE = /\.(mp4|webm|m3u8|mpd|ts|m4s|m4v|mkv|avi|flv|mov|ogg|ogv)(\?|#|$)/i;
+const VIDEO_URL_RE = /\.(mp4|webm|m3u8|mpd|m4v|mkv|avi|flv|mov|ogg|ogv)(\?|#|$)/i;
 const VIDEO_MIME_RE = /^(video\/|application\/x-mpegURL|application\/dash\+xml|application\/vnd\.apple\.mpegurl)/i;
-// Skip tiny segments and tracking pixels
+// Skip DASH/CMAF segments — these are tiny fragments, not complete videos
 const SEGMENT_RE = /\.(ts|m4s)(\?|#|$)/i;
-// CDN patterns that serve video without file extensions (Twitter, Facebook, etc.)
-const VIDEO_CDN_RE = /\/(video|vid|amplify_video|ext_tw_video|tweet_video)\//i;
+const DASH_SEGMENT_RE = /\/(range\/|seg-|chunk-|fragment|init[.-])/i;
 
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     if (details.tabId < 0) return;
     const url = details.url;
-    // Skip individual TS/m4s segments — we want the m3u8/mpd manifest instead
+    // Skip individual segments
     if (SEGMENT_RE.test(url)) return;
-    // Match by file extension OR known video CDN URL patterns
-    if (VIDEO_URL_RE.test(url) || (details.type === 'media' && VIDEO_CDN_RE.test(url))) {
+    if (DASH_SEGMENT_RE.test(url)) return;
+    // Match by file extension (not CDN pattern — those are often segments)
+    if (VIDEO_URL_RE.test(url)) {
       addVideoToTab(details.tabId, {
         url,
         source: 'network',
@@ -167,7 +167,8 @@ chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (details.tabId < 0) return;
     const ct = details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type');
-    if (ct && VIDEO_MIME_RE.test(ct.value) && !SEGMENT_RE.test(details.url)) {
+    if (ct && VIDEO_MIME_RE.test(ct.value) &&
+        !SEGMENT_RE.test(details.url) && !DASH_SEGMENT_RE.test(details.url)) {
       addVideoToTab(details.tabId, {
         url: details.url,
         source: 'network-mime',
@@ -238,49 +239,52 @@ function updateBadge(tabId) {
 async function initiateDownload(url, tab) {
   const filename = generateFilename(url, tab);
 
-  if (/^https?:\/\//i.test(url)) {
-    // For HLS, try to find a direct MP4 URL instead
-    if (/\.m3u8/i.test(url)) {
-      const state = getTabState(tab.id);
-      const directVideo = Array.from(state.videos.values()).find(
-        v => /^https?:\/\//i.test(v.url) && /\.(mp4|webm)/i.test(v.url)
-      );
-      if (directVideo) {
-        url = directVideo.url;
-      }
-      // If no direct URL found, still try downloading the m3u8 URL via page fetch
-    }
+  // First: always check if we have a progressive (complete) MP4 from API parsing
+  const state = getTabState(tab.id);
+  const progressiveVideo = Array.from(state.videos.values()).find(
+    v => v.progressive && /^https?:\/\//i.test(v.url) && /\.mp4/i.test(v.url)
+  );
 
-    // Always download via content script fetch — inherits page cookies & auth
-    // This is fast (normal download speed) and works on Twitter, FB, etc.
+  if (/^https?:\/\//i.test(url) || progressiveVideo) {
+    // Prefer progressive URL if available (complete file from API)
+    const downloadUrl = progressiveVideo ? progressiveVideo.url : url;
+    const dlFilename = progressiveVideo ? generateFilename(progressiveVideo.url, tab) : filename;
+
+    // Download via content script fetch — inherits page cookies & auth
     try {
-      await chrome.tabs.sendMessage(tab.id, {
-        type: 'download-via-page', url, filename
+      const result = await chrome.tabs.sendMessage(tab.id, {
+        type: 'download-via-page', url: downloadUrl, filename: dlFilename
       });
+      // If content script reports file too small, it's a DASH fragment
+      if (result?.error) {
+        console.warn('Download-via-page failed:', result.error);
+        // Try MediaRecorder as fallback
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'record-video', blobUrl: url, filename: dlFilename
+        });
+      }
     } catch (e) {
-      // Fallback: try chrome.downloads directly
+      // Fallback: chrome.downloads directly
       console.warn('Page download failed, trying direct:', e.message);
-      chrome.downloads.download({ url, filename, saveAs: true });
+      chrome.downloads.download({ url: downloadUrl, filename: dlFilename, saveAs: true });
     }
     return;
   }
 
   if (url.startsWith('blob:')) {
-    // Try fetching the blob → download
-    try {
-      const response = await chrome.tabs.sendMessage(tab.id, {
-        type: 'fetch-blob', url
-      });
-      if (response?.dataUrl) {
-        chrome.downloads.download({ url: response.dataUrl, filename, saveAs: true });
+    // First: check for a progressive HTTP URL from API parsing
+    if (progressiveVideo) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'download-via-page', url: progressiveVideo.url, filename
+        });
         return;
-      }
-    } catch (e) { /* blob fetch failed */ }
+      } catch (e) { /* failed */ }
+    }
 
-    // Fallback: find a direct HTTP URL from network cache
-    const state = getTabState(tab.id);
+    // Try finding any direct HTTP URL
     const directVideo = Array.from(state.videos.values()).find(
-      v => v.source === 'network' && /^https?:\/\//i.test(v.url) && !/\.m3u8/i.test(v.url)
+      v => /^https?:\/\//i.test(v.url) && /\.(mp4|webm)/i.test(v.url)
     );
     if (directVideo) {
       try {
@@ -291,7 +295,18 @@ async function initiateDownload(url, tab) {
       } catch (e) { /* failed */ }
     }
 
-    // Last resort: MediaRecorder (slow but guaranteed)
+    // Try fetching the blob directly
+    try {
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        type: 'fetch-blob', url
+      });
+      if (response?.dataUrl) {
+        chrome.downloads.download({ url: response.dataUrl, filename, saveAs: true });
+        return;
+      }
+    } catch (e) { /* blob fetch failed */ }
+
+    // Last resort: MediaRecorder
     try {
       await chrome.tabs.sendMessage(tab.id, {
         type: 'record-video', blobUrl: url, filename
