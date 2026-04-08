@@ -235,61 +235,75 @@ function updateBadge(tabId) {
 
 /* ─── Downloads ─── */
 
-// Sites that serve fragmented MP4 / MSE streams (QuickTime can't play these)
-const FRAGMENTED_DOMAINS = /twimg\.com|twitter\.com|x\.com|fbcdn\.net|facebook\.com|instagram\.com|tiktok/i;
-
 async function initiateDownload(url, tab) {
   const filename = generateFilename(url, tab);
 
-  // Blob URLs or HLS streams → always record via MediaRecorder (guaranteed playable)
-  if (url.startsWith('blob:') || /\.m3u8/i.test(url)) {
-    await recordVideoInTab(tab.id, url, filename);
-    return;
-  }
-
-  // CDN URLs from sites known to serve fragmented MP4 → record instead
-  if (/^https?:\/\//i.test(url) && FRAGMENTED_DOMAINS.test(url)) {
-    await recordVideoInTab(tab.id, url, filename);
-    return;
-  }
-
-  // Regular direct HTTP URLs (e.g. w3schools, static files) → direct download
   if (/^https?:\/\//i.test(url)) {
+    // For HLS, try to find a direct MP4 URL instead
+    if (/\.m3u8/i.test(url)) {
+      const state = getTabState(tab.id);
+      const directVideo = Array.from(state.videos.values()).find(
+        v => /^https?:\/\//i.test(v.url) && /\.(mp4|webm)/i.test(v.url)
+      );
+      if (directVideo) {
+        url = directVideo.url;
+      }
+      // If no direct URL found, still try downloading the m3u8 URL via page fetch
+    }
+
+    // Always download via content script fetch — inherits page cookies & auth
+    // This is fast (normal download speed) and works on Twitter, FB, etc.
     try {
-      await new Promise((resolve, reject) => {
-        chrome.downloads.download({ url, filename, saveAs: true }, (id) => {
-          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-          else resolve(id);
-        });
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'download-via-page', url, filename
       });
     } catch (e) {
-      console.warn('Direct download failed, trying via content script:', e.message);
+      // Fallback: try chrome.downloads directly
+      console.warn('Page download failed, trying direct:', e.message);
+      chrome.downloads.download({ url, filename, saveAs: true });
+    }
+    return;
+  }
+
+  if (url.startsWith('blob:')) {
+    // Try fetching the blob → download
+    try {
+      const response = await chrome.tabs.sendMessage(tab.id, {
+        type: 'fetch-blob', url
+      });
+      if (response?.dataUrl) {
+        chrome.downloads.download({ url: response.dataUrl, filename, saveAs: true });
+        return;
+      }
+    } catch (e) { /* blob fetch failed */ }
+
+    // Fallback: find a direct HTTP URL from network cache
+    const state = getTabState(tab.id);
+    const directVideo = Array.from(state.videos.values()).find(
+      v => v.source === 'network' && /^https?:\/\//i.test(v.url) && !/\.m3u8/i.test(v.url)
+    );
+    if (directVideo) {
       try {
         await chrome.tabs.sendMessage(tab.id, {
-          type: 'download-via-page', url, filename
+          type: 'download-via-page', url: directVideo.url, filename
         });
-      } catch (e2) {
-        // Last resort: record it
-        await recordVideoInTab(tab.id, url, filename);
-      }
+        return;
+      } catch (e) { /* failed */ }
+    }
+
+    // Last resort: MediaRecorder (slow but guaranteed)
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'record-video', blobUrl: url, filename
+      });
+    } catch (e) {
+      console.error('All download methods failed:', e);
     }
     return;
   }
 
   if (url.startsWith('data:')) {
     chrome.downloads.download({ url, filename, saveAs: true });
-  }
-}
-
-async function recordVideoInTab(tabId, url, filename) {
-  try {
-    await chrome.tabs.sendMessage(tabId, {
-      type: 'record-video',
-      blobUrl: url,
-      filename: filename.replace(/\.[^.]+$/, '') + '.mp4'
-    });
-  } catch (e) {
-    console.error('Record video failed:', e);
   }
 }
 
