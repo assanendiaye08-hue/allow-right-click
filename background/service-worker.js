@@ -235,86 +235,61 @@ function updateBadge(tabId) {
 
 /* ─── Downloads ─── */
 
+// Sites that serve fragmented MP4 / MSE streams (QuickTime can't play these)
+const FRAGMENTED_DOMAINS = /twimg\.com|twitter\.com|x\.com|fbcdn\.net|facebook\.com|instagram\.com|tiktok/i;
+
 async function initiateDownload(url, tab) {
   const filename = generateFilename(url, tab);
 
+  // Blob URLs or HLS streams → always record via MediaRecorder (guaranteed playable)
+  if (url.startsWith('blob:') || /\.m3u8/i.test(url)) {
+    await recordVideoInTab(tab.id, url, filename);
+    return;
+  }
+
+  // CDN URLs from sites known to serve fragmented MP4 → record instead
+  if (/^https?:\/\//i.test(url) && FRAGMENTED_DOMAINS.test(url)) {
+    await recordVideoInTab(tab.id, url, filename);
+    return;
+  }
+
+  // Regular direct HTTP URLs (e.g. w3schools, static files) → direct download
   if (/^https?:\/\//i.test(url)) {
-    // For HLS manifests: find a direct MP4 URL instead, or record the video
-    if (/\.m3u8/i.test(url)) {
-      // Look for a direct MP4/WebM URL we already detected on this tab
-      const state = getTabState(tab.id);
-      const directVideo = Array.from(state.videos.values()).find(
-        v => /^https?:\/\//i.test(v.url) && /\.(mp4|webm)/i.test(v.url)
-      );
-      if (directVideo) {
-        // Use the direct URL instead — produces a real MP4 file
-        await initiateDownload(directVideo.url, tab);
-      } else {
-        // No direct URL available — record the video via content script
-        await chrome.tabs.sendMessage(tab.id, {
-          type: 'record-video',
-          blobUrl: url,
-          filename: filename.replace(/\.[^.]+$/, '.mp4')
-        });
-      }
-      return;
-    }
-    // Try direct download first
     try {
-      const downloadId = await new Promise((resolve, reject) => {
+      await new Promise((resolve, reject) => {
         chrome.downloads.download({ url, filename, saveAs: true }, (id) => {
           if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
           else resolve(id);
         });
       });
-      if (!downloadId) throw new Error('Download returned no ID');
     } catch (e) {
       console.warn('Direct download failed, trying via content script:', e.message);
-      // Fallback: download through the content script (has page cookies/auth)
       try {
         await chrome.tabs.sendMessage(tab.id, {
-          type: 'download-via-page',
-          url,
-          filename
+          type: 'download-via-page', url, filename
         });
       } catch (e2) {
-        console.error('Content script download also failed:', e2);
+        // Last resort: record it
+        await recordVideoInTab(tab.id, url, filename);
       }
     }
-  } else if (url.startsWith('blob:')) {
-    // Blob URLs from MediaSource can't always be fetched directly.
-    // Strategy 1: Try to find a direct HTTP MP4 URL from our network cache
-    const state = getTabState(tab.id);
-    const directVideo = Array.from(state.videos.values()).find(
-      v => v.source === 'network' && /^https?:\/\//i.test(v.url) && !/\.m3u8/i.test(v.url)
-    );
-    if (directVideo) {
-      await initiateDownload(directVideo.url, tab);
-      return;
-    }
+    return;
+  }
 
-    // Strategy 2: Ask content script to fetch + convert to data URL
-    try {
-      const response = await chrome.tabs.sendMessage(tab.id, {
-        type: 'fetch-blob',
-        url
-      });
-      if (response?.dataUrl) {
-        chrome.downloads.download({ url: response.dataUrl, filename, saveAs: true });
-      } else if (response?.error) {
-        console.warn('Blob fetch failed:', response.error);
-        // Strategy 3: Record the video via MediaRecorder
-        await chrome.tabs.sendMessage(tab.id, {
-          type: 'record-video',
-          blobUrl: url,
-          filename
-        });
-      }
-    } catch (e) {
-      console.error('Blob download failed:', e);
-    }
-  } else if (url.startsWith('data:')) {
+  if (url.startsWith('data:')) {
     chrome.downloads.download({ url, filename, saveAs: true });
+  }
+}
+
+async function recordVideoInTab(tabId, url, filename) {
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: 'record-video',
+      blobUrl: url,
+      filename: filename.replace(/\.[^.]+$/, '') + '.mp4'
+    });
+  } catch (e) {
+    console.error('Record video failed:', e);
   }
 }
 
